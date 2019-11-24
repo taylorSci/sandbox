@@ -5,13 +5,18 @@ import os.path as osp
 from collections import deque
 from math import pi, sin, cos, atan2, hypot
 from pathlib import Path
+import pickle
+import tkinter.filedialog as tkfd
 
 # 3rd-party libraries
 import numpy as np
+import polarTransform as pt
 
 ########################################################################################################################
 
+
 HOLDER_PATH = Path("C:\\Users\\Taylor\\Desktop\\")
+
 
 ########################################################################################################################
 
@@ -85,6 +90,17 @@ def matrix_to_CSV(filePath, *args):
             twoD = np.array(e, dtype='object') if isinstance(e, list) else e  # Generalize with 2D numpy arrays
             twoD = np.expand_dims(twoD, 0) if twoD.ndim == 1 else twoD
             writer.writerows(twoD)
+
+
+def load_pickle_file(path=None):
+    """Load a pickled file for examination."""
+    if path is None:
+        path = Path(tkfd.askopenfilename(title="Select OLAY", initialdir=HOLDER_PATH))
+    with open(path, 'rb') as fileStream:
+        package = pickle.load(fileStream)
+
+    return package
+
 
 ########################################################################################################################
 
@@ -409,6 +425,7 @@ def flood_fill_3D(arr, start:tuple, paintColor:tuple=(0,0,0), sixDir=True):
 
     return arr
 
+
 ########################################################################################################################
 
 
@@ -655,3 +672,68 @@ def cart_to_hsl(cart):
     hsl = np.stack((hue, sat, lig), axis=-1)
 
     return hsl
+
+
+# TODO Allow 'originCenter' to be True
+def build_polar_cartesian_luts(width, height, wrapCounterClockwise=True, originCenter=False, downscale=2):
+    """Create lookup table from Cartesian to polar domains.
+    Wrap starts pointing east.
+    If 'originCenter' is False, then Cartesian coordinates are located in the 1st quadrant.
+    'downscale' is the ratio of the polar radius over the Cartesian radius.
+    p2clut[theta, r, [x, y]] ; c2plut[x, y, [theta, r]]."""
+    theta = np.linspace(0, 2 * pi, width, endpoint=False)
+    if wrapCounterClockwise:
+        theta = np.flip(theta)
+    rs = list(range(height)) * width
+    ts = []
+    for i in range(width):
+        ts += [theta[i]] * height
+    coords = np.stack((rs, ts), axis=-1)
+    coords = pt.getCartesianPoints(coords, (height, height))
+    coords = (coords / downscale)
+    p2clut = np.reshape(coords, (width, height, 2))
+    xs = list(range(height)) * height
+    ys = []
+    for i in range(height):
+        ys += [i] * height
+    coords = np.stack((xs, ys), axis=-1)
+    coords = pt.getPolarPoints(coords, (height / downscale, height / downscale))
+    coords = np.reshape(coords, (height, height, 2))
+    if wrapCounterClockwise:
+        coords = np.flip(coords, axis=-1)
+    coords[:, :, 0] = coords[:, :, 0] * width / 2 / pi
+    coords[:, :, 0] = np.rot90(coords[:, :, 0], k=-1)
+    coords[:, :, 0] = (width - 1) - coords[:, :, 0]
+    coords[:, :, 1] = (height - 1) - coords[:, :, 1] * downscale
+    c2plut = coords
+
+    return p2clut, c2plut
+
+
+def identify_segments(binary):
+    """Detect the boundaries of segments in a 1D binary array."""
+    assert binary.ndim == 1, "'binary' should be a 1D binary array."
+    segments = []
+    onSegmentFlag = False
+    firstB = len(binary) - 1
+    secondB = 0
+    for i2 in range(len(binary)):
+        if binary[i2] and not onSegmentFlag:  # Moving onto foreground segment
+            firstB = i2
+            onSegmentFlag = True
+        elif onSegmentFlag and not binary[i2]:  # Moving off foreground segment
+            secondB = i2
+            onSegmentFlag = False
+            segments.append([firstB, secondB])
+
+    if firstB >= secondB:  # Close dangling foreground segment
+        if len(segments):  # Segment straddles the frame
+            segments[0] = [firstB, segments[0][1]]
+        elif firstB == secondB == 0:  # Segment encompasses whole frame
+            segments.append(firstB, len(binary))
+        elif firstB == len(binary)-1 and secondB == 0:  # No foreground in the frame
+            pass
+        else:  # Edge case: segment exactly touches right edge without crossing
+            segments.append([firstB, secondB])
+
+    return segments
